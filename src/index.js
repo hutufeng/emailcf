@@ -324,14 +324,20 @@ ${cleanContent}
     rawText = res?.response || (typeof res === 'string' ? res : '');
   }
 
-  // 深度清洗：剔除 deepseek-r1 的 <think>...</think> 思考标签，以及可能的前缀
-  const cleanedSummary = (rawText || '')
+  // 深度清洗：剔除 deepseek-r1 的 <think>...</think> 思考标签，过滤 markdown 格式残留并规范化
+  let cleanedSummary = (rawText || '')
     .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/```[\s\S]*?```/gi, '')
+    .replace(/[#*`_]/g, '')
     .replace(/^摘要[：:]\s*/i, '')
     .replace(/^总结[：:]\s*/i, '')
     .replace(/^核心意图[：:]\s*/i, '')
     .replace(/^这是一封[：:]\s*/i, '')
-    .trim();
+    .split(/\r?\n+/)
+    .map(s => s.trim())
+    .filter(Boolean)[0] || ''; // 若模型分段输出，只取最核心的第一句概括
+
+  cleanedSummary = cleanedSummary.trim();
 
   // 严格校验：如果是复读的提示词，予以剔除重试下一个模型
   if (
@@ -453,10 +459,11 @@ function extractBestActionLink(rawHtml, content) {
     }
   }
 
-  // 2. 从纯文本中提取 URL
+  // 2. 从纯文本中提取 URL（并自动剥除末尾标点符号，防止误伤链接）
   const textUrls = (content || '').match(/https?:\/\/[^\s"'<>]+/gi) || [];
   for (const url of textUrls) {
-    candidates.add(url);
+    const cleanUrl = url.replace(/[.,;!?)\]>]+$/, '');
+    if (cleanUrl) candidates.add(cleanUrl);
   }
 
   if (candidates.size === 0) return null;
