@@ -33,8 +33,8 @@ git push -u origin main
 ---
 
 ## ⚙️ 详细配置手册
-详细的 **Cloudflare DNS 配置**、**Telegram Bot 创建**、**GitHub Secrets 设置** 与 **各大邮箱自动转发教程**，请参阅：
-📖 **[完整的实施方案指南](docs/IMPLEMENTATION_GUIDE.md)**
+详细的 **Telegram Bot 创建**、**Cloudflare 部署**、**QQ/Gmail/Outlook 邮箱配置** 与 **端到端验证排查**，请参阅：
+📖 **[多邮箱聚合通知系统完整配置手册](docs/FULL_SETUP_MANUAL.md)**
 
 ---
 
