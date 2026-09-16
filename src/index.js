@@ -46,6 +46,7 @@ export default {
     }
 
     let emailSubject = '（无主题）';
+    let displayFrom = from;
     let textContent = '';
     let rawSnippet = '';
 
@@ -53,6 +54,21 @@ export default {
       const rawEmail = await new Response(message.raw).arrayBuffer();
       const parser = new PostalMime();
       const parsed = await parser.parse(rawEmail);
+
+      // 提取友好的真实显示发件人（替换底层的 SMTP Envelope 退信封包地址）
+      if (parsed.from) {
+        if (typeof parsed.from === 'object') {
+          const name = (parsed.from.name || '').trim();
+          const addr = (parsed.from.address || '').trim();
+          if (name && addr) {
+            displayFrom = `${name} <${addr}>`;
+          } else {
+            displayFrom = addr || name || displayFrom;
+          }
+        } else if (typeof parsed.from === 'string') {
+          displayFrom = parsed.from.trim();
+        }
+      }
 
       emailSubject = parsed.subject || emailSubject;
 
@@ -71,7 +87,7 @@ export default {
 
       // 双引擎智能提取：规则保障验证码/链接 100% 确定性，AI 负责中文摘要提炼
       const extracted = await extractWithResilience(env, {
-        from,
+        from: displayFrom,
         subject: emailSubject,
         content: textContent,
         rawHtml
@@ -79,7 +95,7 @@ export default {
 
       await sendTelegramNotification(env, {
         sourceTag,
-        from,
+        from: displayFrom,
         subject: emailSubject,
         code: extracted.code,
         link: extracted.link,
@@ -92,7 +108,7 @@ export default {
       const fallbackSummary = rawSnippet || (textContent ? textContent.slice(0, 200) : '邮件已送达，请查看主题与发件人');
       await sendTelegramNotification(env, {
         sourceTag,
-        from,
+        from: displayFrom,
         subject: emailSubject,
         code: null,
         link: null,
