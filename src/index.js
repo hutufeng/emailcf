@@ -5,13 +5,12 @@ import { sendTelegramNotification } from './telegram.js';
 let cachedModels = [];
 let cacheExpireTime = 0;
 
-// 静态高可用备用池（适配 Cloudflare 最新上架模型）
+// 静态高可用备用池（将实测 100% 成功、极速、低消耗的 Llama 3.2 置于第一主力位）
 const FALLBACK_MODELS = [
-  '@cf/qwen/qwen1.5-7b-chat',
   '@cf/meta/llama-3.2-3b-instruct',
   '@cf/meta/llama-3.2-1b-instruct',
-  '@cf/mistral/mistral-7b-instruct-v0.2',
-  '@cf/meta/llama-3-8b-instruct'
+  '@cf/meta/llama-3-8b-instruct',
+  '@cf/mistral/mistral-7b-instruct-v0.2'
 ];
 
 export default {
@@ -97,27 +96,6 @@ export default {
         }, null, 2),
         { headers: { 'Content-Type': 'application/json; charset=utf-8' } }
       );
-    }
-
-    // 2. 专门诊断 callWorkersAI 的端点
-    if (url.pathname === '/debug-ai') {
-      const testEmail = {
-        from: 'security@github.com',
-        subject: '【GitHub】Please verify your new login and device',
-        content: 'Hi hutufeng, We noticed a new login to your account from a new device (Windows 11, Chrome, IP: 183.14.28.91, Shenzhen, China).\n\nTo complete your sign-in, please enter the following verification code:\nSecurity Code: 684291\n\nIf this was not you, please click: https://github.com/account/security/verify?token=123456'
-      };
-
-      try {
-        const aiResult = await callWorkersAI(env, '@cf/meta/llama-3.2-3b-instruct', testEmail);
-        return new Response(JSON.stringify({ success: true, aiResult }, null, 2), {
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      } catch (err) {
-        return new Response(JSON.stringify({ success: false, error: err.message, stack: err.stack }, null, 2), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      }
     }
 
     // 2. Webhook 触发地址（支持本地或外部直接 POST 模拟邮件测试）
