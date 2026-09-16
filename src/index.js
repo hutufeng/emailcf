@@ -5,12 +5,12 @@ import { sendTelegramNotification } from './telegram.js';
 let cachedModels = [];
 let cacheExpireTime = 0;
 
-// 静态高可用备用池（将实测 100% 成功、极速、低消耗的 Llama 3.2 置于第一主力位）
+// 静态高可用备用池（仅选择 Cloudflare 官方 30B~70B 级别中上大模型，保障中文提炼质量与推理能力）
 const FALLBACK_MODELS = [
-  '@cf/meta/llama-3.2-3b-instruct',
-  '@cf/meta/llama-3.2-1b-instruct',
-  '@cf/meta/llama-3-8b-instruct',
-  '@cf/mistral/mistral-7b-instruct-v0.2'
+  '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+  '@cf/meta/llama-3-70b-instruct',
+  '@cf/qwen/qwen2.5-72b-instruct'
 ];
 
 export default {
@@ -22,6 +22,28 @@ export default {
     const to = message.to || '';
     const sourceTag = resolveSourceTag(to);
     console.log(`[Email 收到新邮件] 来自: ${from} | 发往: ${to} | 映射标签: ${sourceTag}`);
+
+    // 安全防御：若配置了授权转发原邮箱白名单，非白名单来源邮件直接静默丢弃
+    if (env.MY_FORWARDING_EMAILS) {
+      const allowedList = String(env.MY_FORWARDING_EMAILS)
+        .split(/[,，\s]+/)
+        .map(e => e.trim().toLowerCase())
+        .filter(Boolean);
+
+      if (allowedList.length > 0) {
+        const rawHeaders = message.headers ? JSON.stringify(Object.fromEntries(message.headers)) : '';
+        const isAuthorized = allowedList.some(email =>
+          from.toLowerCase().includes(email) ||
+          to.toLowerCase().includes(email) ||
+          rawHeaders.toLowerCase().includes(email)
+        );
+
+        if (!isAuthorized) {
+          console.warn(`[安全拦截] 邮件来源未匹配授权原邮箱列表 (${from} -> ${to})，已静默忽略`);
+          return;
+        }
+      }
+    }
 
     let emailSubject = '（无主题）';
     let textContent = '';
@@ -141,46 +163,40 @@ export default {
  * 规则引擎保障核心验证码与主链接绝对精准，AI 引擎生成自然中文摘要
  */
 async function extractWithResilience(env, emailData) {
-  // 1. 本地规则优先提取高置信度要素（验证码 + 最佳操作链接）
+  // 1. 本地规则优先提取核心验证码与最佳操作链接（零幻觉，100% 准确）
   const localRule = extractWithLocalRules(emailData.subject, emailData.content, emailData.rawHtml);
 
-  // 2. 尝试调用 Workers AI 生成中文摘要
+  // 2. 尝试调用 Workers AI 生成地道中文摘要
   let aiSummary = null;
-  let aiCode = null;
-  let aiLink = null;
   let isAiSuccess = false;
 
   const models = await getCandidateModels(env);
   for (const model of models) {
     try {
-      const res = await callWorkersAI(env, model, emailData);
-      if (res && res.summary) {
-        aiSummary = res.summary;
-        aiCode = res.code;
-        aiLink = res.link;
+      const summaryText = await callWorkersAI(env, model, emailData);
+      if (summaryText) {
+        aiSummary = summaryText;
         isAiSuccess = true;
         break;
       }
     } catch (err) {
-      console.warn(`[模型 ${model}] 调用失败，自动轮换: ${err.message}`);
+      console.warn(`[模型 ${model}] 生成摘要重试: ${err.message}`);
     }
   }
 
-  // 3. 结果合并：以本地规则的验证码/链接为最高优先级，以 AI 摘要为首选摘要
-  const finalCode = localRule.code || aiCode || null;
-  const finalLink = localRule.link || aiLink || null;
+  // 3. 摘要合并：优先使用 AI 生成的生动中文摘要，兜底使用本地原文提炼
   const finalSummary = (isAiSuccess && aiSummary) ? aiSummary : localRule.summary;
 
   return {
-    code: finalCode,
-    link: finalLink,
+    code: localRule.code,
+    link: localRule.link,
     summary: finalSummary,
     isFallback: !isAiSuccess
   };
 }
 
 /**
- * 动态抓取 Cloudflare 官方可用免费 Text Generation 模型
+ * 动态抓取 Cloudflare 官方可用免费 Text Generation 模型（严格过滤：仅挑选 30B ~ 70B 中上大模型）
  */
 async function getCandidateModels(env) {
   const now = Date.now();
@@ -203,9 +219,11 @@ async function getCandidateModels(env) {
       if (resp.ok) {
         const data = await resp.json();
         if (data.success && Array.isArray(data.result)) {
+          // 仅筛选属于 @cf/ 且评分 > 0（确认为 30B~70B 中大模型）的优质模型
           const validModels = data.result
             .map(m => m.name)
-            .filter(name => typeof name === 'string' && name.startsWith('@cf/'));
+            .filter(name => typeof name === 'string' && name.startsWith('@cf/') && scoreModel(name) > 0);
+
           discovered = validModels.sort((a, b) => scoreModel(b) - scoreModel(a));
         }
       }
@@ -215,71 +233,118 @@ async function getCandidateModels(env) {
   }
 
   if (discovered.length === 0) {
-    discovered = FALLBACK_MODELS;
+    discovered = [...FALLBACK_MODELS];
   } else {
-    for (const fb of FALLBACK_MODELS.reverse()) {
+    for (const fb of FALLBACK_MODELS) {
       if (!discovered.includes(fb)) {
-        discovered.unshift(fb);
+        discovered.push(fb);
       }
     }
   }
 
   cachedModels = discovered;
   cacheExpireTime = now + 24 * 60 * 60 * 1000;
+  console.log(`[Workers AI 选型] 当前就绪中上大模型池:`, cachedModels);
   return cachedModels;
 }
 
+/**
+ * 模型分级与质量评分体系：
+ * - 排除所有 < 30B 参数的小模型（1B/2B/3B/7B/8B/mini 等打负分淘汰）
+ * - 重点遴选中上大模型（70B/72B/32B/Large），保障地道中文提炼与高阶推理
+ */
 function scoreModel(name) {
-  let score = 0;
   const n = name.toLowerCase();
-  if (n.includes('llama-3.2')) score += 60;
-  else if (n.includes('llama-3.3')) score += 55;
-  else if (n.includes('mistral')) score += 40;
-  else if (n.includes('llama-3')) score += 30;
-  if (n.includes('3b') || n.includes('1b') || n.includes('8b') || n.includes('7b')) score += 10;
+
+  // 1. 坚决排除小参数、轻量级模型
+  const isSmallModel = /\b(0\.5b|1b|1\.5b|2b|3b|4b|7b|8b|9b|11b|13b|14b)\b/.test(n) ||
+    n.includes('tiny') || n.includes('mini') || n.includes('small') || n.includes('micro') || n.includes('nano');
+  if (isSmallModel) {
+    return -1;
+  }
+
+  let score = 0;
+
+  // 2. 超大参数量级（70B ~ 72B）- 最高优先级
+  if (n.includes('72b') || n.includes('70b')) {
+    score += 100;
+    if (n.includes('llama-3.3')) score += 20; // Llama 3.3 70B 指令与多语言极强
+    if (n.includes('qwen2.5')) score += 15;   // Qwen 2.5 中文理解天花板
+  }
+  // 3. 中大参数量级（30B ~ 35B）- 次高优先级
+  else if (n.includes('32b') || n.includes('30b') || n.includes('33b') || n.includes('34b')) {
+    score += 75;
+    if (n.includes('deepseek-r1')) score += 15; // DeepSeek R1 深度推理
+    if (n.includes('qwen')) score += 10;
+  }
+  // 4. 显式声明为 large 的大模型
+  else if (n.includes('large')) {
+    score += 50;
+  } else {
+    // 其余无明确大模型标识的一律不选用
+    return -1;
+  }
+
   return score;
 }
 
 /**
- * 单个模型的 Workers AI 调用与鲁棒 JSON 解析
+ * 单个模型的 Workers AI 调用：纯净提炼自然中文摘要（兼容 DeepSeek R1 思考标签过滤）
  */
 async function callWorkersAI(env, model, { from, subject, content }) {
   if (!env.AI) {
     throw new Error('Workers AI 绑定未配置');
   }
 
-  const cleanContent = (content || '').slice(0, 2500);
-  const prompt = `你是一个邮件信息提取助手。请阅读以下邮件，提炼 1-2 句简明的中文概要，并提取验证码或关键验证链接：
+  const cleanContent = (content || '').slice(0, 3000);
+  const prompt = `请阅读以下邮件内容，提炼出 1 到 2 句通顺、流畅、自然的中文摘要，准确概括邮件的核心目的或关键通知事项（字数控制在60字以内）。
 
 发件人: ${from}
 主题: ${subject}
 正文:
 ${cleanContent}
 
-请直接输出 JSON 格式（不要输出额外解释）：
-{
-  "summary": "1到2句中文概要",
-  "code": "提取的纯验证码或null",
-  "link": "关键操作链接或null"
-}`;
+请直接输出中文摘要内容，严禁输出“摘要：”、“这是一封”等任何多余前缀：`;
 
   let rawText = '';
   try {
     const res = await env.AI.run(model, {
       prompt,
-      max_tokens: 256
+      max_tokens: 200
     });
     rawText = res?.response || (typeof res === 'string' ? res : '');
   } catch (e) {
-    // 降级尝试 messages 格式
     const res = await env.AI.run(model, {
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 256
+      messages: [
+        { role: 'system', content: '你是一个专业的中文邮件助手，擅长准确、精炼地总结邮件核心意图。' },
+        { role: 'user', content: prompt }
+      ],
+      max_tokens: 200
     });
     rawText = res?.response || (typeof res === 'string' ? res : '');
   }
 
-  return safeParseAIJson(rawText);
+  // 深度清洗：剔除 deepseek-r1 的 <think>...</think> 思考标签，以及可能的前缀
+  const cleanedSummary = (rawText || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/^摘要[：:]\s*/i, '')
+    .replace(/^总结[：:]\s*/i, '')
+    .replace(/^核心意图[：:]\s*/i, '')
+    .replace(/^这是一封[：:]\s*/i, '')
+    .trim();
+
+  // 严格校验：如果是复读的提示词，予以剔除重试下一个模型
+  if (
+    !cleanedSummary ||
+    cleanedSummary.includes('1到2句') ||
+    cleanedSummary.includes('中文概要') ||
+    cleanedSummary.includes('不超过50字') ||
+    cleanedSummary.length < 5
+  ) {
+    throw new Error('AI 生成摘要未满足质量要求');
+  }
+
+  return cleanedSummary;
 }
 
 /**
@@ -400,7 +465,8 @@ function extractBestActionLink(rawHtml, content) {
   const BLACKLIST = [
     'unsubscribe', 'optout', 'privacy', 'policy', 'terms', 'agreement',
     'help', 'support', 'contact', 'about', 'facebook.com', 'twitter.com',
-    'linkedin.com', 'instagram.com', 'youtube.com', 'w3.org', 'schemas.microsoft.com'
+    'linkedin.com', 'instagram.com', 'youtube.com', 'w3.org', 'schemas.microsoft.com',
+    'googleapis.com', 'gstatic.com', 'googlefonts', 'cloudflare.com', 'gravatar.com', 'wp.com'
   ];
 
   let bestLink = null;
@@ -409,8 +475,11 @@ function extractBestActionLink(rawHtml, content) {
   for (const rawUrl of candidates) {
     const lower = rawUrl.toLowerCase();
 
-    // 命中黑名单直接跳过
+    // 1. 命中黑名单域名或关键字直接跳过
     if (BLACKLIST.some(kw => lower.includes(kw))) continue;
+
+    // 2. 拦截常见静态资源文件和字体样式文件（如 fonts.googleapis.com 引入的 css/woff）
+    if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf)(\?.*)?$/i.test(lower)) continue;
 
     let score = 0;
 

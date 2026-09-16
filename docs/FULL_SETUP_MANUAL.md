@@ -52,9 +52,10 @@
 
 ### 3. 配置环境变量与机密 (Variables and Secrets)
 在同页面的 **Variables and Secrets** 展开项中（或部署完成后在 Worker 的 `Settings` -> `Variables and Secrets`）：
-添加以下两项机密（点击 **Add Secret**）：
-- `TG_BOT_TOKEN`：填入第一阶段获得的 Telegram Bot Token
-- `TG_CHAT_ID`：填入第一阶段获得的 Telegram 数字 Chat ID
+添加以下机密与配置项：
+- `TG_BOT_TOKEN`（必填）：填入第一阶段获得的 Telegram Bot Token
+- `TG_CHAT_ID`（必填）：填入第一阶段获得的 Telegram 数字 Chat ID
+- `MY_FORWARDING_EMAILS`（选填，安全白名单）：填入你允许转发的个人邮箱列表（如 `hutu_feng@qq.com, hutufeng@gmail.com`，逗号分隔）。配置后，非你个人邮箱转送的垃圾邮件将直接静默拦截丢弃，不予处理。
 
 ### 4. 绑定 Workers AI
 进入 Worker 项目详情页 $\rightarrow$ **Settings（设置）** $\rightarrow$ **Bindings（绑定）**：
