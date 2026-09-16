@@ -5,13 +5,13 @@ import { sendTelegramNotification } from './telegram.js';
 let cachedModels = [];
 let cacheExpireTime = 0;
 
-// 静态高可用备用池
+// 静态高可用备用池（适配 Cloudflare 最新上架模型）
 const FALLBACK_MODELS = [
-  '@cf/meta/llama-3.1-8b-instruct',
   '@cf/qwen/qwen1.5-7b-chat',
-  '@cf/meta/llama-3-8b-instruct',
+  '@cf/meta/llama-3.2-3b-instruct',
+  '@cf/meta/llama-3.2-1b-instruct',
   '@cf/mistral/mistral-7b-instruct-v0.2',
-  '@cf/google/gemma-7b-it'
+  '@cf/meta/llama-3-8b-instruct'
 ];
 
 export default {
@@ -99,38 +99,39 @@ export default {
       );
     }
 
-    // 2. 专门诊断 Workers AI 是否能正常推理的端点
+    // 2. 专门诊断 Workers AI 到底哪个模型可用的端点
     if (url.pathname === '/debug-ai') {
-      try {
-        if (!env.AI) {
-          return new Response(JSON.stringify({ success: false, error: 'env.AI 绑定不存在 (undefined)！请在 Cloudflare 控制台添加 Bindings -> Workers AI -> 变量名 AI' }, null, 2), {
+      const testModels = [
+        '@cf/qwen/qwen1.5-7b-chat',
+        '@cf/meta/llama-3.2-3b-instruct',
+        '@cf/meta/llama-3.2-1b-instruct',
+        '@cf/mistral/mistral-7b-instruct-v0.2',
+        '@cf/meta/llama-3-8b-instruct'
+      ];
+
+      const report = [];
+      for (const m of testModels) {
+        try {
+          const aiRes = await env.AI.run(m, {
+            prompt: '请回复五个字：模型测试正常'
+          });
+          return new Response(JSON.stringify({
+            success: true,
+            working_model: m,
+            response: aiRes,
+            tested_history: report
+          }, null, 2), {
             headers: { 'Content-Type': 'application/json; charset=utf-8' }
           });
+        } catch (e) {
+          report.push({ model: m, error: e.message });
         }
-
-        // 测试一个简单的提示词
-        const testModel = '@cf/meta/llama-3.1-8b-instruct';
-        const aiRes = await env.AI.run(testModel, {
-          prompt: '请用中文回复：AI测试正常'
-        });
-
-        return new Response(JSON.stringify({
-          success: true,
-          model: testModel,
-          raw_response: aiRes
-        }, null, 2), {
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      } catch (err) {
-        return new Response(JSON.stringify({
-          success: false,
-          error_message: err.message,
-          error_stack: err.stack
-        }, null, 2), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
       }
+
+      return new Response(JSON.stringify({ success: false, all_failed: report }, null, 2), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+      });
     }
 
     // 2. Webhook 触发地址（支持本地或外部直接 POST 模拟邮件测试）
