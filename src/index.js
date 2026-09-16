@@ -72,11 +72,11 @@ export default {
         JSON.stringify({
           status: 'ok',
           time: new Date().toISOString(),
-          activeModelPool: models,
+          received_env_keys: Object.keys(env || {}),
           secrets_status: {
-            has_tg_bot_token: !!env.TG_BOT_TOKEN,
-            has_tg_chat_id: !!env.TG_CHAT_ID,
-            has_cf_token: !!env.CLOUDFLARE_API_TOKEN
+            has_tg_bot_token: !!(env.TG_BOT_TOKEN || env.tg_bot_token || env.BOT_TOKEN),
+            has_tg_chat_id: !!(env.TG_CHAT_ID || env.tg_chat_id || env.CHAT_ID),
+            has_ai_binding: !!env.AI
           },
           tips: '访问 /test-tg 可直接测试 Telegram 连通性'
         }, null, 2),
@@ -93,7 +93,7 @@ export default {
           subject: '🎉 Telegram Bot 连通性测试成功',
           code: '888666',
           link: 'https://telegram.org',
-          summary: '这是一条由 Cloudflare Worker 发出的诊断测试通知。如果您在 Telegram 看到这条消息，说明 TG_BOT_TOKEN 和 TG_CHAT_ID 配置完全正确！',
+          summary: '这是一条由 Cloudflare Worker 发出的诊断测试通知。如果您在 Telegram 看到这条消息，说明配置完全正确！',
           isFallback: false
         });
 
@@ -108,10 +108,10 @@ export default {
         return new Response(JSON.stringify({
           success: false,
           error_message: err.message,
+          current_env_keys: Object.keys(env || {}),
           diagnostic_tips: [
-            '1. 必须在 Telegram 中先找到你的 Bot 并主动发送一条 /start',
-            '2. 检查 Cloudflare 控制台 -> Workers & Pages -> mail-to-tg -> Settings -> Variables and Secrets 中是否正确添加了 TG_BOT_TOKEN 与 TG_CHAT_ID',
-            '3. 如果刚添加了 Secret，请在控制台触发重新部署以使变量生效'
+            '重要排查：请检查变量添加的位置是【运行时变量】还是【构建变量】。',
+            '在 Worker 页面 -> 设置 (Settings) -> 变量和机密 (Variables and Secrets) 中配置运行时机密。'
           ]
         }, null, 2), {
           status: 500,

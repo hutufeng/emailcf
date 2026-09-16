@@ -16,8 +16,11 @@ export function escapeHtml(str) {
 export async function sendTelegramNotification(env, data) {
   const { sourceTag, from, subject, code, link, summary, isFallback } = data;
 
-  if (!env.TG_BOT_TOKEN || !env.TG_CHAT_ID) {
-    const errMsg = `[Telegram 配置缺失] TG_BOT_TOKEN 存在: ${!!env.TG_BOT_TOKEN}, TG_CHAT_ID 存在: ${!!env.TG_CHAT_ID}`;
+  const botToken = env.TG_BOT_TOKEN || env.tg_bot_token || env.BOT_TOKEN;
+  const chatId = env.TG_CHAT_ID || env.tg_chat_id || env.CHAT_ID;
+
+  if (!botToken || !chatId) {
+    const errMsg = `[Telegram 配置缺失] TG_BOT_TOKEN 存在: ${!!botToken}, TG_CHAT_ID 存在: ${!!chatId}`;
     console.error(errMsg);
     throw new Error(errMsg);
   }
@@ -46,7 +49,7 @@ export async function sendTelegramNotification(env, data) {
   }
 
   const payload = {
-    chat_id: String(env.TG_CHAT_ID).trim(),
+    chat_id: String(chatId).trim(),
     text: message,
     parse_mode: 'HTML',
     disable_web_page_preview: true
@@ -80,12 +83,12 @@ export async function sendTelegramNotification(env, data) {
 
   // 首次发送（若带按钮失败，自动剥离按钮重发降级）
   try {
-    return await executeTelegramSend(env.TG_BOT_TOKEN, payload);
+    return await executeTelegramSend(botToken, payload);
   } catch (err) {
     if (payload.reply_markup) {
       console.warn('带按钮发送失败，尝试剥离按钮后纯文本发送:', err.message);
       delete payload.reply_markup;
-      return await executeTelegramSend(env.TG_BOT_TOKEN, payload);
+      return await executeTelegramSend(botToken, payload);
     }
     throw err;
   }
