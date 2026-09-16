@@ -1,4 +1,4 @@
-name = "mail-to-tg"
+name = "emailcf"
 main = "src/index.js"
 compatibility_date = "2024-09-01"
 
