@@ -99,39 +99,25 @@ export default {
       );
     }
 
-    // 2. 专门诊断 Workers AI 到底哪个模型可用的端点
+    // 2. 专门诊断 callWorkersAI 的端点
     if (url.pathname === '/debug-ai') {
-      const testModels = [
-        '@cf/qwen/qwen1.5-7b-chat',
-        '@cf/meta/llama-3.2-3b-instruct',
-        '@cf/meta/llama-3.2-1b-instruct',
-        '@cf/mistral/mistral-7b-instruct-v0.2',
-        '@cf/meta/llama-3-8b-instruct'
-      ];
+      const testEmail = {
+        from: 'security@github.com',
+        subject: '【GitHub】Please verify your new login and device',
+        content: 'Hi hutufeng, We noticed a new login to your account from a new device (Windows 11, Chrome, IP: 183.14.28.91, Shenzhen, China).\n\nTo complete your sign-in, please enter the following verification code:\nSecurity Code: 684291\n\nIf this was not you, please click: https://github.com/account/security/verify?token=123456'
+      };
 
-      const report = [];
-      for (const m of testModels) {
-        try {
-          const aiRes = await env.AI.run(m, {
-            prompt: '请回复五个字：模型测试正常'
-          });
-          return new Response(JSON.stringify({
-            success: true,
-            working_model: m,
-            response: aiRes,
-            tested_history: report
-          }, null, 2), {
-            headers: { 'Content-Type': 'application/json; charset=utf-8' }
-          });
-        } catch (e) {
-          report.push({ model: m, error: e.message });
-        }
+      try {
+        const aiResult = await callWorkersAI(env, '@cf/meta/llama-3.2-3b-instruct', testEmail);
+        return new Response(JSON.stringify({ success: true, aiResult }, null, 2), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ success: false, error: err.message, stack: err.stack }, null, 2), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
       }
-
-      return new Response(JSON.stringify({ success: false, all_failed: report }, null, 2), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json; charset=utf-8' }
-      });
     }
 
     // 2. Webhook 触发地址（支持本地或外部直接 POST 模拟邮件测试）
