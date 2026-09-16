@@ -22,6 +22,7 @@ export default {
     const from = message.from || '未知发信人';
     const to = message.to || '';
     const sourceTag = resolveSourceTag(to);
+    console.log(`[Email 收到新邮件] 来自: ${from} | 发往: ${to} | 映射标签: ${sourceTag}`);
 
     let emailSubject = '（无主题）';
     let textContent = '';
@@ -64,17 +65,59 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // 健康检查及当前活跃模型清单查看
+    // 1. 健康检查及当前活跃模型清单查看
     if (url.pathname === '/' || url.pathname === '/health') {
       const models = await getCandidateModels(env);
       return new Response(
         JSON.stringify({
           status: 'ok',
           time: new Date().toISOString(),
-          activeModelPool: models
+          activeModelPool: models,
+          secrets_status: {
+            has_tg_bot_token: !!env.TG_BOT_TOKEN,
+            has_tg_chat_id: !!env.TG_CHAT_ID,
+            has_cf_token: !!env.CLOUDFLARE_API_TOKEN
+          },
+          tips: '访问 /test-tg 可直接测试 Telegram 连通性'
         }, null, 2),
-        { headers: { 'Content-Type': 'application/json' } }
+        { headers: { 'Content-Type': 'application/json; charset=utf-8' } }
       );
+    }
+
+    // 2. Telegram 一键自检诊断端点
+    if (url.pathname === '/test-tg') {
+      try {
+        const testRes = await sendTelegramNotification(env, {
+          sourceTag: '系统自检测试',
+          from: 'system-diagnostic@local',
+          subject: '🎉 Telegram Bot 连通性测试成功',
+          code: '888666',
+          link: 'https://telegram.org',
+          summary: '这是一条由 Cloudflare Worker 发出的诊断测试通知。如果您在 Telegram 看到这条消息，说明 TG_BOT_TOKEN 和 TG_CHAT_ID 配置完全正确！',
+          isFallback: false
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          message: 'Telegram 消息发送成功！请检查你的 Telegram 客户端。',
+          response: testRes
+        }, null, 2), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({
+          success: false,
+          error_message: err.message,
+          diagnostic_tips: [
+            '1. 必须在 Telegram 中先找到你的 Bot 并主动发送一条 /start',
+            '2. 检查 Cloudflare 控制台 -> Workers & Pages -> mail-to-tg -> Settings -> Variables and Secrets 中是否正确添加了 TG_BOT_TOKEN 与 TG_CHAT_ID',
+            '3. 如果刚添加了 Secret，请在控制台触发重新部署以使变量生效'
+          ]
+        }, null, 2), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json; charset=utf-8' }
+        });
+      }
     }
 
     // Webhook 触发地址
