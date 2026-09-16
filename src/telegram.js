@@ -43,18 +43,6 @@ export async function sendTelegramNotification(env, data) {
     message += `\n📝 <b>概要:</b>\n${safeSummary}\n`;
   }
 
-  // Telegram 消息总长度安全截断
-  if (message.length > 4000) {
-    message = message.slice(0, 3950) + '\n...[已截断]';
-  }
-
-  const payload = {
-    chat_id: String(chatId).trim(),
-    text: message,
-    parse_mode: 'HTML',
-    disable_web_page_preview: true
-  };
-
   // 验证链接安全清洗
   let cleanLink = null;
   if (link && typeof link === 'string') {
@@ -68,6 +56,21 @@ export async function sendTelegramNotification(env, data) {
     }
   }
 
+  // 如果有验证链接，直接在正文也输出超链接
+  if (cleanLink) {
+    message += `\n🔗 <b>验证/操作链接:</b>\n<a href="${cleanLink}">${escapeHtml(cleanLink)}</a>\n`;
+  }
+
+  // Telegram 消息总长度安全截断
+  if (message.length > 4000) {
+    message = message.slice(0, 3950) + '\n...[已截断]';
+  }
+
+  const payload = {
+    chat_id: String(chatId).trim(),
+    text: message,
+    parse_mode: 'HTML',
+    disable_web_page_preview: true
   if (cleanLink) {
     payload.reply_markup = {
       inline_keyboard: [

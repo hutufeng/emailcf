@@ -34,29 +34,49 @@ export default {
       const parsed = await parser.parse(rawEmail);
 
       emailSubject = parsed.subject || emailSubject;
-      textContent = parsed.text || sanitizeHtml(parsed.html) || '';
-      rawSnippet = textContent.slice(0, 300).trim();
+
+      const rawHtml = parsed.html || '';
+      const htmlConverted = rawHtml ? convertHtmlToText(rawHtml) : '';
+      const rawText = parsed.text || '';
+
+      // 若 rawText 太短（如 QQ 邮箱经常只在 text 写“QQ邮箱”4个字），转用 HTML 转换文本
+      if (rawText.trim().length < 60 && htmlConverted.length > rawText.length) {
+        textContent = htmlConverted;
+      } else {
+        textContent = rawText || htmlConverted || '';
+      }
+
+      rawSnippet = extractCleanSnippet(textContent);
+
+      // 调用具备“动态模型拉取 + 自动故障切换 + 本地规则兜底”的高可用提取引擎
+      const extracted = await extractWithResilience(env, {
+        from,
+        subject: emailSubject,
+        content: textContent,
+        rawHtml
+      });
+
+      await sendTelegramNotification(env, {
+        sourceTag,
+        from,
+        subject: emailSubject,
+        code: extracted.code,
+        link: extracted.link,
+        summary: extracted.summary || rawSnippet,
+        isFallback: extracted.isFallback
+      });
     } catch (parseErr) {
-      console.error('MIME 解析异常，采用基础信封信息:', parseErr);
-      rawSnippet = '邮件内容结构复杂，无法完整解析正文';
+      console.error('邮件处理异常:', parseErr);
+      await sendTelegramNotification(env, {
+        sourceTag,
+        from,
+        subject: emailSubject,
+        code: null,
+        link: null,
+        summary: '邮件解析异常，请登录原邮箱查收',
+        isFallback: true
+      });
     }
-
-    // 调用具备“动态模型拉取 + 自动故障切换 + 本地规则兜底”的高可用提取引擎
-    const extracted = await extractWithResilience(env, {
-      from,
-      subject: emailSubject,
-      content: textContent
-    });
-
-    await sendTelegramNotification(env, {
-      sourceTag,
-      from,
-      subject: emailSubject,
-      code: extracted.code,
-      link: extracted.link,
-      summary: extracted.summary || rawSnippet,
-      isFallback: extracted.isFallback
-    });
   },
 
   /**
@@ -120,24 +140,34 @@ export default {
  * 遍历动态候选模型池，遇异常自动切换；若全部失败，切换到纯本地正则规则引擎
  */
 async function extractWithResilience(env, emailData) {
-  const models = await getCandidateModels(env);
+  // 1. 优先执行本地确定性引擎：如果已经识别出验证码或验证链接，秒级返回，确保 100% 精确且不超时
+  const quickRule = extractWithLocalRules(emailData.subject, emailData.content, emailData.rawHtml);
+  if (quickRule.code || quickRule.link) {
+    return { ...quickRule, isFallback: false };
+  }
 
-  // 1. 依次尝试动态模型
+  // 2. 普通通知或长邮件：尝试调用 Workers AI 生成精炼中文摘要
+  const models = await getCandidateModels(env);
   for (const model of models) {
     try {
       const res = await callWorkersAI(env, model, emailData);
       if (res) {
-        return { ...res, isFallback: false };
+        // 如果 AI 没提取出 link 但本地找到了 link，做合并
+        return {
+          type: res.type || quickRule.type,
+          code: res.code || quickRule.code,
+          link: res.link || quickRule.link,
+          summary: res.summary || quickRule.summary,
+          isFallback: false
+        };
       }
     } catch (err) {
-      console.warn(`[模型 ${model}] 调用失败，自动切换下一个候选模型. 原因: ${err.message}`);
+      console.warn(`[模型 ${model}] 调用失败，切换下一个: ${err.message}`);
     }
   }
 
-  // 2. 所有 AI 模型调用失败（如 Quota 耗尽或服务中断），激活本地正则规则终极防线
-  console.warn('全部 AI 模型不可用，自动切换到本地正则规则提取引擎');
-  const localExtracted = extractWithLocalRules(emailData.subject, emailData.content);
-  return { ...localExtracted, isFallback: true };
+  // 3. AI 调用降级保底
+  return { ...quickRule, isFallback: true };
 }
 
 /**
@@ -272,7 +302,7 @@ ${cleanContent}
 /**
  * 终极本地确定性规则提取引擎（Zero Cost & 100% 离线可用）
  */
-function extractWithLocalRules(subject, content) {
+function extractWithLocalRules(subject, content, rawHtml = '') {
   const fullText = `${subject || ''}\n${content || ''}`;
 
   // 1. 验证码规则：匹配常见“验证码/verification code/security code”附近的 4-8 位字符
@@ -286,7 +316,6 @@ function extractWithLocalRules(subject, content) {
   for (const reg of codeRegexList) {
     const match = fullText.match(reg);
     if (match && match[1]) {
-      // 排除全字母非典型验证码
       if (!/^[a-zA-Z]+$/.test(match[1]) || match[1].length <= 6) {
         code = match[1].trim();
         break;
@@ -294,26 +323,16 @@ function extractWithLocalRules(subject, content) {
     }
   }
 
-  // 2. 链接规则：匹配带有确认、激活、验证特征的 URL
-  let link = null;
-  const urlMatches = content.match(/https?:\/\/[^\s"'<>]+/gi) || [];
-  for (const url of urlMatches) {
-    const lowerUrl = url.toLowerCase();
-    if (
-      lowerUrl.includes('verify') ||
-      lowerUrl.includes('activate') ||
-      lowerUrl.includes('confirm') ||
-      lowerUrl.includes('token') ||
-      lowerUrl.includes('auth') ||
-      lowerUrl.includes('reset')
-    ) {
-      link = url;
-      break;
-    }
-  }
+  // 2. 链接规则：双通道扫描（优先扫描原始 HTML 里的 href，再扫描正文 URL）
+  const link = extractVerificationLink(rawHtml, content);
 
-  // 3. 概要：截取有效文本
-  const summary = (content || '').slice(0, 200).replace(/\s+/g, ' ').trim() || '（正文为空）';
+  // 3. 概要：智能识别与提炼
+  let summary = '';
+  if (subject && subject.includes('自动转发验证')) {
+    summary = 'QQ 邮箱自动转发授权申请，请点击下方链接完成验证绑定。';
+  } else {
+    summary = extractCleanSnippet(content);
+  }
 
   return {
     type: code ? 'code' : (link ? 'link' : 'general'),
@@ -321,6 +340,85 @@ function extractWithLocalRules(subject, content) {
     link,
     summary
   };
+}
+
+/**
+ * 专用验证链接提取器：扫描 HTML 属性和文本
+ */
+function extractVerificationLink(rawHtml, content) {
+  // 1. 优先扫描 HTML 里的 href（针对 QQ 邮箱验证链接：mail.qq.com/cgi-bin/login?action=verify_forward...）
+  if (rawHtml) {
+    const hrefMatches = rawHtml.matchAll(/href=["'](https?:\/\/[^"'\s<>]+)["']/gi);
+    for (const match of hrefMatches) {
+      const url = match[1].replace(/&amp;/g, '&');
+      const lower = url.toLowerCase();
+      if (
+        lower.includes('verify') ||
+        lower.includes('confirm') ||
+        lower.includes('forward') ||
+        lower.includes('activate') ||
+        lower.includes('action=') ||
+        lower.includes('mail.qq.com') ||
+        lower.includes('token')
+      ) {
+        return url;
+      }
+    }
+  }
+
+  // 2. 再从正文中扫描 URL
+  const textUrls = (content || '').match(/https?:\/\/[^\s"'<>]+/gi) || [];
+  for (const url of textUrls) {
+    const lower = url.toLowerCase();
+    if (
+      lower.includes('verify') ||
+      lower.includes('confirm') ||
+      lower.includes('forward') ||
+      lower.includes('activate') ||
+      lower.includes('action=') ||
+      lower.includes('mail.qq.com') ||
+      lower.includes('token')
+    ) {
+      return url;
+    }
+  }
+
+  return textUrls.length > 0 ? textUrls[0] : null;
+}
+
+/**
+ * 提取干净的正文摘要（过滤开头的孤独单词如“QQ邮箱”）
+ */
+function extractCleanSnippet(text) {
+  if (!text) return '（正文为空）';
+  const clean = text
+    .replace(/^QQ邮箱\s*/i, '')
+    .replace(/^QQmail\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean.slice(0, 250) || text.slice(0, 250);
+}
+
+/**
+ * HTML 转纯文本：保留超链接为 "文字: URL" 格式
+ */
+function convertHtmlToText(html) {
+  if (!html) return '';
+  return html
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<a\s+[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, ' $2 ($1) ')
+    .replace(/<(?:p|div|tr|br|h[1-6])\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n+/g, '\n\n')
+    .trim();
 }
 
 /**
@@ -333,14 +431,4 @@ function resolveSourceTag(toAddress) {
   if (lower.includes('outlook') || lower.includes('hotmail')) return 'Outlook';
   if (lower.includes('163') || lower.includes('netease')) return '网易 163';
   return '自定义邮箱';
-}
-
-function sanitizeHtml(html) {
-  if (!html) return '';
-  return html
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
