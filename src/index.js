@@ -65,59 +65,17 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // 1. 健康检查及当前活跃模型清单查看
+    // 1. 基础健康检查及当前活跃模型清单查看
     if (url.pathname === '/' || url.pathname === '/health') {
       const models = await getCandidateModels(env);
       return new Response(
         JSON.stringify({
           status: 'ok',
           time: new Date().toISOString(),
-          received_env_keys: Object.keys(env || {}),
-          secrets_status: {
-            has_tg_bot_token: !!(env.TG_BOT_TOKEN || env.tg_bot_token || env.BOT_TOKEN),
-            has_tg_chat_id: !!(env.TG_CHAT_ID || env.tg_chat_id || env.CHAT_ID),
-            has_ai_binding: !!env.AI
-          },
-          tips: '访问 /test-tg 可直接测试 Telegram 连通性'
+          activeModelPool: models
         }, null, 2),
         { headers: { 'Content-Type': 'application/json; charset=utf-8' } }
       );
-    }
-
-    // 2. Telegram 一键自检诊断端点
-    if (url.pathname === '/test-tg') {
-      try {
-        const testRes = await sendTelegramNotification(env, {
-          sourceTag: '系统自检测试',
-          from: 'system-diagnostic@local',
-          subject: '🎉 Telegram Bot 连通性测试成功',
-          code: '888666',
-          link: 'https://telegram.org',
-          summary: '这是一条由 Cloudflare Worker 发出的诊断测试通知。如果您在 Telegram 看到这条消息，说明配置完全正确！',
-          isFallback: false
-        });
-
-        return new Response(JSON.stringify({
-          success: true,
-          message: 'Telegram 消息发送成功！请检查你的 Telegram 客户端。',
-          response: testRes
-        }, null, 2), {
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      } catch (err) {
-        return new Response(JSON.stringify({
-          success: false,
-          error_message: err.message,
-          current_env_keys: Object.keys(env || {}),
-          diagnostic_tips: [
-            '重要排查：请检查变量添加的位置是【运行时变量】还是【构建变量】。',
-            '在 Worker 页面 -> 设置 (Settings) -> 变量和机密 (Variables and Secrets) 中配置运行时机密。'
-          ]
-        }, null, 2), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json; charset=utf-8' }
-        });
-      }
     }
 
     // Webhook 触发地址

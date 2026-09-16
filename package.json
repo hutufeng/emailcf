@@ -5,8 +5,6 @@
   "main": "src/index.js",
   "scripts": {
     "dev": "wrangler dev",
-    "build": "node scripts/prepare.cjs",
-    "predeploy": "node scripts/prepare.cjs",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
