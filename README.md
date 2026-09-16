@@ -8,7 +8,7 @@
 - **终极本地规则防线**：若遭遇全网 AI 故障或额度耗尽，自动切换纯本地确定性正则引擎提取验证码与直达链接，永不宕机、永不漏发。
 - **验证码一键复制**：自动提取邮件验证码，采用 Telegram `<code>` 样式，手机/桌面点击即可复制到剪贴板。
 - **验证链接直达**：自动识别激活、验证、重置密码链接，生成内联直达按钮（Inline Keyboard）。
-- **CI/CD 自动化**：GitHub Actions 持续集成，每次 `git push` 自动触发 Cloudflare 全球边缘部署。
+- **Cloudflare Git 自动部署**：直接在 Cloudflare 控制台关联 GitHub 仓库，每次 `git push` 自动触发 Cloudflare 全球边缘构建部署，免配置 GitHub Actions。
 
 ---
 

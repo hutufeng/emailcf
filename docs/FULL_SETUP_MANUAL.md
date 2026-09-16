@@ -6,7 +6,7 @@
 
 ## 目录
 1. [第一阶段：Telegram Bot 准备](#第一阶段telegram-bot-准备)
-2. [第二阶段：Cloudflare 部署与自动更新（二选一）](#第二阶段cloudflare-部署与自动更新二选一)
+2. [第二阶段：Cloudflare 网页端 Git 自动部署](#第二阶段cloudflare-网页端-git-自动部署)
 3. [第三阶段：Cloudflare Email Routing 域名解析与规则](#第三阶段cloudflare-email-routing-域名解析与规则)
 4. [第四阶段：QQ 邮箱配置指南（自动转发）](#第四阶段qq-邮箱配置指南自动转发)
 5. [第五阶段：Gmail 邮箱配置指南（自动转发 + 可选 Pub/Sub）](#第五阶段gmail-邮箱配置指南自动转发--可选-pubsub)
@@ -31,17 +31,11 @@
 
 ---
 
-## 第二阶段：Cloudflare 部署与自动更新（二选一）
+## 第二阶段：Cloudflare 网页端 Git 自动部署
 
-你可以根据习惯自由选择以下两种自动部署方式之一：
-- **方式一（推荐，最省心）**：直接在 Cloudflare 网页控制台绑定 GitHub 仓库，无需配置 GitHub Secrets。
-- **方式二**：使用本项目已内置的 GitHub Actions 工作流进行持续集成部署。
+本项目推荐直接在 Cloudflare 网页控制台绑定 GitHub 仓库，无需配置 GitHub Actions 和复杂 Secrets，纯网页点击即可完成上线与自动更新。
 
----
-
-### 方式一：Cloudflare 控制台直接网页 Git 部署（推荐）
-
-#### 1. 关联 GitHub 仓库
+### 1. 关联 GitHub 仓库
 1. 登录 [Cloudflare 控制台](https://dash.cloudflare.com/)。
 2. 在左侧菜单点击 **Workers & Pages** $\rightarrow$ **Overview（概述）**。
 3. 点击 **Create application（创建应用程序）** 按钮。
@@ -50,49 +44,25 @@
    - 授权 Cloudflare 访问你的 GitHub 账号，并从仓库列表中选择 **`hutufeng/emailcf`**。
    - 生产分支选择：`main`。
 
-#### 2. 构建与部署配置
+### 2. 构建与部署配置
 在配置页面中：
 - **Project name（项目名称）**：填入 `mail-to-tg`
 - **Build command（构建命令）**：`npm install`
 - **Deploy command（部署命令）**：`npx wrangler deploy`
 
-#### 3. 配置环境变量与机密 (Variables and Secrets)
+### 3. 配置环境变量与机密 (Variables and Secrets)
 在同页面的 **Variables and Secrets** 展开项中（或部署完成后在 Worker 的 `Settings` -> `Variables and Secrets`）：
 添加以下两项机密（点击 **Add Secret**）：
 - `TG_BOT_TOKEN`：填入第一阶段获得的 Telegram Bot Token
 - `TG_CHAT_ID`：填入第一阶段获得的 Telegram 数字 Chat ID
 
-#### 4. 绑定 Workers AI
+### 4. 绑定 Workers AI
 进入 Worker 项目详情页 $\rightarrow$ **Settings（设置）** $\rightarrow$ **Bindings（绑定）**：
 - 点击 **Add** $\rightarrow$ 选择 **Workers AI**。
 - **Variable name（变量名称）** 填写：`AI`（必须大写，与代码严格一致）。
 - 点击 **Save and deploy（保存并部署）**。
 
-> **效果**：今后无论是本地提交代码 `git push`，还是在 GitHub 网页上修改代码，Cloudflare 会自动捕获变更并在几秒内自动构建发布最新版本！
-
----
-
-### 方式二：使用 GitHub Actions 自动化部署
-
-如果你更习惯在 GitHub 侧管理 CI/CD，本项目已内置 `.github/workflows/deploy.yml`。
-
-#### 1. 获取 Cloudflare 凭证
-1. **Account ID**：
-   - 登录 [Cloudflare 控制台](https://dash.cloudflare.com/)，在首页右下角复制 **账户 ID (Account ID)**。
-2. **API Token**：
-   - 访问 [API 令牌管理页](https://dash.cloudflare.com/profile/api-tokens)。
-   - 点击 **创建令牌 (Create Token)**，选用模板 **“编辑 Cloudflare Workers” (Edit Cloudflare Workers)**。
-   - 资源范围选择“所有账户/区域”，完成创建并复制令牌，此即 `CLOUDFLARE_API_TOKEN`。
-
-#### 2. 在 GitHub 仓库配置 Secrets
-1. 浏览器打开你的 GitHub 仓库密钥配置页：  
-   `https://github.com/hutufeng/emailcf/settings/secrets/actions`
-2. 点击 **New repository secret**，添加 4 项：
-   - `CLOUDFLARE_API_TOKEN`：刚才创建的 Cloudflare API 令牌
-   - `CLOUDFLARE_ACCOUNT_ID`：Cloudflare 账户 ID
-   - `TG_BOT_TOKEN`：Telegram Bot Token (`789012...`)
-   - `TG_CHAT_ID`：你的 Telegram 数字 ID (`123456...`)
-3. 添加后，进入仓库 **Actions** 标签页，点击 `Deploy Cloudflare Worker` $\rightarrow$ `Run workflow` 即可完成部署。
+> **效果**：今后只要你在本地提交代码 `git push`，Cloudflare 就会自动拉取最新代码并在几秒内自动构建发布到全球边缘节点！
 
 ---
 
