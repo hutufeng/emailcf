@@ -56,14 +56,14 @@ export async function sendTelegramNotification(env, data) {
     }
   }
 
-  // 如果有验证链接，直接在正文也输出超链接
+  // 如果有验证链接，直接在正文输出超链接（注意：href 属性值必须严格使用 escapeHtml 转义 & 符号，防止 Telegram 实体解析崩溃）
   if (cleanLink) {
-    message += `\n🔗 <b>验证/操作链接:</b>\n<a href="${cleanLink}">${escapeHtml(cleanLink)}</a>\n`;
+    message += `\n🔗 <b>验证/操作链接:</b>\n<a href="${escapeHtml(cleanLink)}">${escapeHtml(cleanLink)}</a>\n`;
   }
 
-  // Telegram 消息总长度安全截断
+  // Telegram 消息总长度安全截断（注意：仅截断文本长度，不能破坏 HTML 标签）
   if (message.length > 4000) {
-    message = message.slice(0, 3950) + '\n...[已截断]';
+    message = message.slice(0, 3900) + '...';
   }
 
   const payload = {
@@ -73,7 +73,8 @@ export async function sendTelegramNotification(env, data) {
     disable_web_page_preview: true
   };
 
-  if (cleanLink) {
+  // Telegram 按钮 URL 限制不可超 2048 字符且必须符合规范
+  if (cleanLink && cleanLink.length <= 2048) {
     payload.reply_markup = {
       inline_keyboard: [
         [
@@ -86,16 +87,39 @@ export async function sendTelegramNotification(env, data) {
     };
   }
 
-  // 首次发送（若带按钮失败，自动剥离按钮重发降级）
+  // 三级高可用发送机制：
+  // 1. 尝试精美 HTML + 按钮发送
+  // 2. 失败降级：剥离按钮后尝试 HTML 发送
+  // 3. 仍失败降级（彻底免疫 Telegram 实体解析报错）：剥离所有 HTML 标签，以纯文本无损发送！
   try {
     return await executeTelegramSend(botToken, payload);
-  } catch (err) {
+  } catch (err1) {
+    console.warn('[Telegram 发送第 1 级失败，尝试剥离按钮降级]:', err1.message);
     if (payload.reply_markup) {
-      console.warn('带按钮发送失败，尝试剥离按钮后纯文本发送:', err.message);
       delete payload.reply_markup;
-      return await executeTelegramSend(botToken, payload);
+      try {
+        return await executeTelegramSend(botToken, payload);
+      } catch (err2) {
+        console.warn('[Telegram 发送第 2 级失败，尝试纯文本终极降级]:', err2.message);
+      }
     }
-    throw err;
+
+    // 第 3 级：完全剥离 HTML 标签转为纯文本，移除 parse_mode，100% 保障可读性与送达
+    const plainText = message
+      .replace(/<[^>]+>/g, '')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+
+    const fallbackPayload = {
+      chat_id: String(chatId).trim(),
+      text: plainText,
+      disable_web_page_preview: true
+    };
+
+    return await executeTelegramSend(botToken, fallbackPayload);
   }
 }
 

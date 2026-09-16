@@ -88,13 +88,15 @@ export default {
       });
     } catch (parseErr) {
       console.error('邮件处理异常:', parseErr);
+      // 容灾保障：即使后续处理出现意外，优先展示已解析到的正文片段，杜绝正文被死板提示覆盖
+      const fallbackSummary = rawSnippet || (textContent ? textContent.slice(0, 200) : '邮件已送达，请查看主题与发件人');
       await sendTelegramNotification(env, {
         sourceTag,
         from,
         subject: emailSubject,
         code: null,
         link: null,
-        summary: '邮件解析异常，请登录原邮箱查收',
+        summary: `${fallbackSummary}\n\n⚠️ 处理提示: ${parseErr.message || '未知异常'}`,
         isFallback: true
       });
     }
