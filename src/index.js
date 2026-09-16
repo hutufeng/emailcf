@@ -268,11 +268,11 @@ async function getCandidateModels(env) {
 function scoreModel(name) {
   let score = 0;
   const n = name.toLowerCase();
-  if (n.includes('llama-3.1')) score += 50;
-  else if (n.includes('qwen')) score += 45;
-  else if (n.includes('llama-3')) score += 40;
-  else if (n.includes('mistral')) score += 35;
-  if (n.includes('8b') || n.includes('7b')) score += 10;
+  if (n.includes('llama-3.2')) score += 60;
+  else if (n.includes('llama-3.3')) score += 55;
+  else if (n.includes('mistral')) score += 40;
+  else if (n.includes('llama-3')) score += 30;
+  if (n.includes('3b') || n.includes('1b') || n.includes('8b') || n.includes('7b')) score += 10;
   return score;
 }
 
@@ -285,36 +285,36 @@ async function callWorkersAI(env, model, { from, subject, content }) {
   }
 
   const cleanContent = (content || '').slice(0, 2500);
-  const prompt = `请分析以下邮件，并提炼 1-2 句简明扼要的中文概要。
-如果邮件包含验证码或关键操作链接，请一并提取。
+  const prompt = `你是一个邮件信息提取助手。请阅读以下邮件，提炼 1-2 句简明的中文概要，并提取验证码或关键验证链接：
 
 发件人: ${from}
 主题: ${subject}
 正文:
 ${cleanContent}
 
-请严格按以下 JSON 结构输出，不要输出任何其他内容：
+请直接输出 JSON 格式（不要输出额外解释）：
 {
-  "summary": "1-2句中文核心概要",
-  "code": "验证码字符串或 null",
-  "link": "关键操作链接或 null"
+  "summary": "1到2句中文概要",
+  "code": "提取的纯验证码或null",
+  "link": "关键操作链接或null"
 }`;
 
-  const response = await env.AI.run(model, {
-    messages: [
-      {
-        role: 'system',
-        content: '你是一个专业的邮件分析提取程序。必须且仅输出合法的 JSON 格式，严禁附加任何解释。'
-      },
-      {
-        role: 'user',
-        content: prompt
-      }
-    ],
-    temperature: 0.1
-  });
+  let rawText = '';
+  try {
+    const res = await env.AI.run(model, {
+      prompt,
+      max_tokens: 256
+    });
+    rawText = res?.response || (typeof res === 'string' ? res : '');
+  } catch (e) {
+    // 降级尝试 messages 格式
+    const res = await env.AI.run(model, {
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 256
+    });
+    rawText = res?.response || (typeof res === 'string' ? res : '');
+  }
 
-  const rawText = response.response || (typeof response === 'string' ? response : '');
   return safeParseAIJson(rawText);
 }
 
