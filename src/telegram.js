@@ -71,6 +71,8 @@ export async function sendTelegramNotification(env, data) {
     text: message,
     parse_mode: 'HTML',
     disable_web_page_preview: true
+  };
+
   if (cleanLink) {
     payload.reply_markup = {
       inline_keyboard: [
